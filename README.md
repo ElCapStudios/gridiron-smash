@@ -2,7 +2,7 @@
 
 A 3D sports game for the browser. Made by a 5 year old and his dad.
 
-Play it here: **https://erinels.github.io/gridiron-smash/**
+Play it here: **https://elcapstudios.github.io/gridiron-smash/**
 
 ## Four games in one
 
@@ -87,7 +87,7 @@ The game is plain HTML and JavaScript. There is nothing to build and nothing to
 install. You only need a small web server, because browsers block local files.
 
 ```
-git clone https://github.com/erinels/gridiron-smash.git
+git clone https://github.com/ElCapStudios/gridiron-smash.git
 cd gridiron-smash
 python -m http.server 8777
 ```
