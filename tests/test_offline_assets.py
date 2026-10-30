@@ -56,6 +56,10 @@ class ScriptSourceParser(HTMLParser):
 def local_script_sources(markup, root):
     parser = ScriptSourceParser()
     parser.feed(markup)
+    has_unprocessed_markup = bool(parser.rawdata)
+    parser.close()
+    if has_unprocessed_markup:
+        raise ValueError("incomplete markup at end of document")
     if parser.has_base_href:
         raise ValueError("base href is not allowed for offline scripts")
     if parser.has_inline_event_handler:
@@ -215,6 +219,15 @@ class OfflineAssetTests(unittest.TestCase):
             '<![CDATA[ x ><script src="https://cdn.example.test/x.js"></script>]]>'
         )
         with self.assertRaisesRegex(ValueError, "unknown markup declarations"):
+            game_script_sources(markup, ROOT)
+
+    def test_rejects_unterminated_cdata_markup(self):
+        markup = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+            '<![CDATA[><script src="https://cdn.example.test/x.js"></script>'
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete markup"):
             game_script_sources(markup, ROOT)
 
     def test_rejects_svg_and_mathml_markup(self):
