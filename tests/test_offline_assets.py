@@ -19,15 +19,24 @@ class ScriptSourceParser(HTMLParser):
         self.has_foreign_markup = False
         self.has_inline_event_handler = False
         self.has_srcdoc = False
+        self.has_embedded_document = False
+        self.has_active_script_url = False
+        self.has_unknown_declaration = False
 
     def handle_starttag(self, tag, attrs):
         if tag in ("svg", "math"):
             self.has_foreign_markup = True
-        for name, _ in attrs:
+        if tag in ("iframe", "frame", "object", "embed"):
+            self.has_embedded_document = True
+        for name, value in attrs:
             if name.startswith("on"):
                 self.has_inline_event_handler = True
             if name == "srcdoc":
                 self.has_srcdoc = True
+            if value is not None:
+                normalized = value.translate(str.maketrans("", "", "\t\r\n")).lstrip().lower()
+                if normalized.startswith(("javascript:", "data:text/html")):
+                    self.has_active_script_url = True
         if tag == "base" and any(name == "href" for name, _ in attrs):
             self.has_base_href = True
         if tag == "script":
@@ -40,6 +49,9 @@ class ScriptSourceParser(HTMLParser):
             else:
                 self.has_inline_script = True
 
+    def unknown_decl(self, data):
+        self.has_unknown_declaration = True
+
 
 def local_script_sources(markup, root):
     parser = ScriptSourceParser()
@@ -50,6 +62,12 @@ def local_script_sources(markup, root):
         raise ValueError("inline event handlers are not allowed for offline scripts")
     if parser.has_srcdoc:
         raise ValueError("srcdoc is not allowed for offline scripts")
+    if parser.has_embedded_document:
+        raise ValueError("embedded documents are not allowed in offline scripts")
+    if parser.has_active_script_url:
+        raise ValueError("active script URLs are not allowed in offline scripts")
+    if parser.has_unknown_declaration:
+        raise ValueError("unknown markup declarations are not allowed in offline scripts")
     if parser.has_script_href:
         raise ValueError("script href is not allowed for offline scripts")
     if parser.has_foreign_markup:
@@ -158,6 +176,45 @@ class OfflineAssetTests(unittest.TestCase):
             '&gt;&lt;/script&gt;"></iframe>'
         )
         with self.assertRaisesRegex(ValueError, "srcdoc"):
+            game_script_sources(markup, ROOT)
+
+    def test_rejects_embedded_document_elements(self):
+        scripts = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+        )
+        elements = (
+            '<iframe src="https://cdn.example.test/page"></iframe>',
+            '<frame src="https://cdn.example.test/page">',
+            '<object data="https://cdn.example.test/page"></object>',
+            '<embed src="https://cdn.example.test/page">',
+        )
+        for element in elements:
+            with self.subTest(element=element):
+                with self.assertRaisesRegex(ValueError, "embedded documents"):
+                    game_script_sources(scripts + element, ROOT)
+
+    def test_rejects_javascript_and_html_data_urls(self):
+        scripts = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+        )
+        links = (
+            '<a href="  JaVaScRiPt:import(\'https://cdn.example.test/x.js\')">run</a>',
+            '<a href="data:text/html,%3Cscript%20src=https%3A%2F%2Fcdn.example.test%2Fx.js%3E%3C%2Fscript%3E">open</a>',
+        )
+        for link in links:
+            with self.subTest(link=link):
+                with self.assertRaisesRegex(ValueError, "active script URLs"):
+                    game_script_sources(scripts + link, ROOT)
+
+    def test_rejects_cdata_markup_declarations(self):
+        markup = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+            '<![CDATA[ x ><script src="https://cdn.example.test/x.js"></script>]]>'
+        )
+        with self.assertRaisesRegex(ValueError, "unknown markup declarations"):
             game_script_sources(markup, ROOT)
 
     def test_rejects_svg_and_mathml_markup(self):
