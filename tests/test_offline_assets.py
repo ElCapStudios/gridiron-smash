@@ -17,10 +17,17 @@ class ScriptSourceParser(HTMLParser):
         self.has_script_href = False
         self.has_inline_script = False
         self.has_foreign_markup = False
+        self.has_inline_event_handler = False
+        self.has_srcdoc = False
 
     def handle_starttag(self, tag, attrs):
         if tag in ("svg", "math"):
             self.has_foreign_markup = True
+        for name, _ in attrs:
+            if name.startswith("on"):
+                self.has_inline_event_handler = True
+            if name == "srcdoc":
+                self.has_srcdoc = True
         if tag == "base" and any(name == "href" for name, _ in attrs):
             self.has_base_href = True
         if tag == "script":
@@ -39,6 +46,10 @@ def local_script_sources(markup, root):
     parser.feed(markup)
     if parser.has_base_href:
         raise ValueError("base href is not allowed for offline scripts")
+    if parser.has_inline_event_handler:
+        raise ValueError("inline event handlers are not allowed for offline scripts")
+    if parser.has_srcdoc:
+        raise ValueError("srcdoc is not allowed for offline scripts")
     if parser.has_script_href:
         raise ValueError("script href is not allowed for offline scripts")
     if parser.has_foreign_markup:
@@ -123,6 +134,30 @@ class OfflineAssetTests(unittest.TestCase):
             "</script>"
         )
         with self.assertRaisesRegex(ValueError, "local src"):
+            game_script_sources(markup, ROOT)
+
+    def test_rejects_inline_event_handlers(self):
+        scripts = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+        )
+        handlers = (
+            '<body onload="import(\'https://cdn.example.test/x.js\')"></body>',
+            '<img src="pixel.png" onerror="import(\'https://cdn.example.test/x.js\')">',
+        )
+        for markup in handlers:
+            with self.subTest(markup=markup):
+                with self.assertRaisesRegex(ValueError, "inline event handlers"):
+                    game_script_sources(scripts + markup, ROOT)
+
+    def test_rejects_iframe_srcdoc(self):
+        markup = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+            '<iframe srcdoc="&lt;script src=&quot;https://cdn.example.test/x.js&quot;'
+            '&gt;&lt;/script&gt;"></iframe>'
+        )
+        with self.assertRaisesRegex(ValueError, "srcdoc"):
             game_script_sources(markup, ROOT)
 
     def test_rejects_svg_and_mathml_markup(self):
