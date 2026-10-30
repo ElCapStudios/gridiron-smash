@@ -13,17 +13,23 @@ class ScriptSourceParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.sources = []
+        self.has_base_href = False
 
     def handle_starttag(self, tag, attrs):
+        if tag == "base" and any(name == "href" for name, _ in attrs):
+            self.has_base_href = True
         if tag == "script":
-            source = dict(attrs).get("src")
-            if source is not None:
-                self.sources.append(source)
+            for name, source in attrs:
+                if name == "src":
+                    self.sources.append(source or "")
+                    break
 
 
 def local_script_sources(markup, root):
     parser = ScriptSourceParser()
     parser.feed(markup)
+    if parser.has_base_href:
+        raise ValueError("base href is not allowed for offline scripts")
     base = root.resolve()
 
     for source in parser.sources:
@@ -72,8 +78,24 @@ class OfflineAssetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "local relative path"):
             local_script_sources(markup, ROOT)
 
+    def test_rejects_a_base_href(self):
+        markup = (
+            '<base href="https://cdn.example.test/">'
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+        )
+        with self.assertRaisesRegex(ValueError, "base href"):
+            game_script_sources(markup, ROOT)
+
     def test_rejects_an_absolute_script_path(self):
         markup = '<script src="/game.js"></script>'
+        with self.assertRaisesRegex(ValueError, "local relative path"):
+            local_script_sources(markup, ROOT)
+
+    def test_uses_the_first_duplicate_script_source(self):
+        markup = (
+            '<script src="https://cdn.example.test/game.js" src="game.js"></script>'
+        )
         with self.assertRaisesRegex(ValueError, "local relative path"):
             local_script_sources(markup, ROOT)
 
