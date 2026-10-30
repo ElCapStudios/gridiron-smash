@@ -16,8 +16,11 @@ class ScriptSourceParser(HTMLParser):
         self.has_base_href = False
         self.has_script_href = False
         self.has_inline_script = False
+        self.has_foreign_markup = False
 
     def handle_starttag(self, tag, attrs):
+        if tag in ("svg", "math"):
+            self.has_foreign_markup = True
         if tag == "base" and any(name == "href" for name, _ in attrs):
             self.has_base_href = True
         if tag == "script":
@@ -38,6 +41,8 @@ def local_script_sources(markup, root):
         raise ValueError("base href is not allowed for offline scripts")
     if parser.has_script_href:
         raise ValueError("script href is not allowed for offline scripts")
+    if parser.has_foreign_markup:
+        raise ValueError("SVG and MathML are not allowed in offline scripts")
     if parser.has_inline_script:
         raise ValueError("scripts must use a local src")
     base = root.resolve()
@@ -119,6 +124,23 @@ class OfflineAssetTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "local src"):
             game_script_sources(markup, ROOT)
+
+    def test_rejects_svg_and_mathml_markup(self):
+        scripts = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+        )
+        nested_scripts = {
+            "svg": '<style><script href="https://cdn.example.test/x.js">'
+            "</script></style>",
+            "math": '<style><script>import("https://cdn.example.test/x.js")'
+            "</script></style>",
+        }
+        for tag, nested_script in nested_scripts.items():
+            with self.subTest(tag=tag):
+                markup = f"{scripts}<{tag}>{nested_script}</{tag}>"
+                with self.assertRaisesRegex(ValueError, "SVG and MathML"):
+                    game_script_sources(markup, ROOT)
 
     def test_rejects_an_absolute_script_path(self):
         markup = '<script src="/game.js"></script>'
