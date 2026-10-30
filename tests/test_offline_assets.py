@@ -22,6 +22,7 @@ class ScriptSourceParser(HTMLParser):
         self.has_embedded_document = False
         self.has_active_script_url = False
         self.has_unknown_declaration = False
+        self.has_markup_in_comment = False
 
     def handle_starttag(self, tag, attrs):
         if tag in ("svg", "math"):
@@ -34,7 +35,9 @@ class ScriptSourceParser(HTMLParser):
             if name == "srcdoc":
                 self.has_srcdoc = True
             if value is not None:
-                normalized = value.translate(str.maketrans("", "", "\t\r\n")).lstrip().lower()
+                normalized = value.translate(
+                    str.maketrans("", "", "\t\r\n")
+                ).lstrip("".join(chr(code) for code in range(0x21))).lower()
                 if normalized.startswith(("javascript:", "data:text/html")):
                     self.has_active_script_url = True
         if tag == "base" and any(name == "href" for name, _ in attrs):
@@ -52,6 +55,10 @@ class ScriptSourceParser(HTMLParser):
     def unknown_decl(self, data):
         self.has_unknown_declaration = True
 
+    def handle_comment(self, data):
+        if "<" in data:
+            self.has_markup_in_comment = True
+
 
 def local_script_sources(markup, root):
     parser = ScriptSourceParser()
@@ -60,6 +67,8 @@ def local_script_sources(markup, root):
     parser.close()
     if has_unprocessed_markup:
         raise ValueError("incomplete markup at end of document")
+    if parser.has_markup_in_comment:
+        raise ValueError("markup inside comments is not allowed")
     if parser.has_base_href:
         raise ValueError("base href is not allowed for offline scripts")
     if parser.has_inline_event_handler:
@@ -205,6 +214,7 @@ class OfflineAssetTests(unittest.TestCase):
         )
         links = (
             '<a href="  JaVaScRiPt:import(\'https://cdn.example.test/x.js\')">run</a>',
+            '<a href="\x01javascript:import(\'https://cdn.example.test/x.js\')">run</a>',
             '<a href="data:text/html,%3Cscript%20src=https%3A%2F%2Fcdn.example.test%2Fx.js%3E%3C%2Fscript%3E">open</a>',
         )
         for link in links:
@@ -229,6 +239,20 @@ class OfflineAssetTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "incomplete markup"):
             game_script_sources(markup, ROOT)
+
+    def test_rejects_malformed_comments_that_hide_scripts(self):
+        scripts = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+        )
+        comments = (
+            '<!--><script src="https://cdn.example.test/x.js"></script>-->',
+            '<!-- x --!><script src="https://cdn.example.test/x.js"></script>-->',
+        )
+        for comment in comments:
+            with self.subTest(comment=comment):
+                with self.assertRaises(ValueError):
+                    game_script_sources(scripts + comment, ROOT)
 
     def test_rejects_svg_and_mathml_markup(self):
         scripts = (
