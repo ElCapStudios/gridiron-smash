@@ -14,15 +14,21 @@ class ScriptSourceParser(HTMLParser):
         super().__init__()
         self.sources = []
         self.has_base_href = False
+        self.has_script_href = False
+        self.has_inline_script = False
 
     def handle_starttag(self, tag, attrs):
         if tag == "base" and any(name == "href" for name, _ in attrs):
             self.has_base_href = True
         if tag == "script":
+            if any(name in ("href", "xlink:href") for name, _ in attrs):
+                self.has_script_href = True
             for name, source in attrs:
                 if name == "src":
                     self.sources.append(source or "")
                     break
+            else:
+                self.has_inline_script = True
 
 
 def local_script_sources(markup, root):
@@ -30,6 +36,10 @@ def local_script_sources(markup, root):
     parser.feed(markup)
     if parser.has_base_href:
         raise ValueError("base href is not allowed for offline scripts")
+    if parser.has_script_href:
+        raise ValueError("script href is not allowed for offline scripts")
+    if parser.has_inline_script:
+        raise ValueError("scripts must use a local src")
     base = root.resolve()
 
     for source in parser.sources:
@@ -85,6 +95,29 @@ class OfflineAssetTests(unittest.TestCase):
             '<script src="game.js"></script>'
         )
         with self.assertRaisesRegex(ValueError, "base href"):
+            game_script_sources(markup, ROOT)
+
+    def test_rejects_svg_script_href(self):
+        for attribute in ("href", "xlink:href"):
+            with self.subTest(attribute=attribute):
+                markup = (
+                    '<script src="vendor/three.min.js"></script>'
+                    '<script src="game.js"></script>'
+                    f'<svg><script {attribute}="https://cdn.example.test/x.js">'
+                    "</script></svg>"
+                )
+                with self.assertRaisesRegex(ValueError, "script href"):
+                    game_script_sources(markup, ROOT)
+
+    def test_rejects_inline_module_script(self):
+        markup = (
+            '<script src="vendor/three.min.js"></script>'
+            '<script src="game.js"></script>'
+            '<script type="module">'
+            'import "https://cdn.example.test/x.js";'
+            "</script>"
+        )
+        with self.assertRaisesRegex(ValueError, "local src"):
             game_script_sources(markup, ROOT)
 
     def test_rejects_an_absolute_script_path(self):
